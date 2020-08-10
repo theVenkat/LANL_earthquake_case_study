@@ -1,0 +1,205 @@
+#importing some library 
+!pip install pyunpack
+!pip install patool
+!pip install catboost
+
+from pyunpack import Archive
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from tqdm import tqdm
+from scipy.stats import kurtosis
+from scipy.stats import skew
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_absolute_error
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import GridSearchCV
+from sklearn.svm import NuSVR, SVR
+from sklearn.model_selection import GridSearchCV
+from sklearn.svm import NuSVR, SVR
+from sklearn import model_selection, metrics
+from sklearn.kernel_ridge import KernelRidge
+import xgboost as xgb
+import lightgbm as lgb
+from catboost import CatBoostRegressor, Pool
+import warnings
+warnings.filterwarnings('ignore')
+
+
+#Importing the data
+!wget --header="...."
+
+!pip install pyunpack
+!pip install patool
+#above code to extract the files in the content path
+from pyunpack import Archive
+Archive('/content/train.csv.zip').extractall('/content')
+
+#loading the data
+
+train = pd.read_csv('/content/train.csv', nrows=6000000,dtype={'acoustic_data': np.int16, 'time_to_failure': np.float64})
+
+#Feature Engineering:
+rows = 150000
+segments = int(np.floor(train.shape[0] / rows))
+
+X = pd.DataFrame(index=range(segments), dtype=np.float64,columns=features)
+Y = pd.DataFrame(index=range(segments), dtype=np.float64,columns=['time_to_failure'])
+
+strain = []
+
+for segment in tqdm(range(segments)):
+    seg = train.iloc[segment*rows:segment*rows+rows]
+    x = pd.Series(seg['acoustic_data'].values)
+    y = seg['time_to_failure'].values[-1]
+    Y.loc[segment, 'time_to_failure'] = y
+
+    X.loc[segment, 'meen'] = x.mean()
+    X.loc[segment, 'std'] = x.std()
+    X.loc[segment, 'min'] = x.min()
+    X.loc[segment, 'max'] = x.max()    
+    X.loc[segment, 'kurt'] = kurtosis(x) 
+    X.loc[segment, 'skew'] = skew(x)
+    X.loc[segment, 'abs_max'] = np.abs(x).max()
+    X.loc[segment, 'abs_mean'] = np.abs(x).mean()
+    X.loc[segment, 'abs_std'] = np.abs(x).std()
+    X.loc[segment, 'q_01'] = np.quantile(x,0.01)
+    X.loc[segment, 'q_05'] = np.quantile(x,0.05)
+    X.loc[segment, 'q_95'] = np.quantile(x,0.95)
+    X.loc[segment, 'q_99'] = np.quantile(x,0.99)
+    
+    for windows in [10, 100, 1000]:#Adding Roling Features
+        
+        x_roll_std = x.rolling(windows).std().dropna().values
+
+
+        X.loc[segment, 'avg_roll_' + str(windows)] = x_roll_std.mean()
+        X.loc[segment, 'std_roll_' + str(windows)] = x_roll_std.std()
+        X.loc[segment, 'max_roll_' + str(windows)] = x_roll_std.max()
+        X.loc[segment, 'min_roll_' + str(windows)] = x_roll_std.min()
+
+        X.loc[segment, 'q_01_roll_' + str(windows)] = np.quantile(x_roll_std, 0.01)
+        X.loc[segment, 'q_05_roll_' + str(windows)] = np.quantile(x_roll_std, 0.05)
+        X.loc[segment, 'q_95_roll_' + str(windows)] = np.quantile(x_roll_std, 0.95)
+        X.loc[segment, 'q_99_roll_' + str(windows)] = np.quantile(x_roll_std, 0.99)
+        
+#Scaling the data     
+scaler = StandardScaler()
+scaler.fit(X)
+X_SS= pd.DataFrame(scaler.transform(X), columns=X.columns)
+
+
+
+#Modeling
+
+#Funtion that runs on required algorithme and returns metrics
+
+def fit_ml_algo(algo, X_tr, y_tr, X_te):
+    
+    # Fiting the model
+    model = algo.fit(X_tr, y_tr)
+
+    # Cross-validation score metric
+    yp_train = model.predict(X_tr)
+    # yp_test = model.predict(X_te)
+
+
+    tr_mae = mean_absolute_error(y, yp_train)
+    # te_mae = mean_absolute_error(y, yp_test)
+
+    return tr_mae, model#, te_mae
+
+#XGBRegressor
+clf = xgb.XGBRegressor(n_jobs=-1)
+params = {
+    'n_estimators': [5, 10, 50], 
+     'max_depth': [1, 5, 10]
+}
+
+clf1 = GridSearchCV(clf, params, scoring='neg_mean_absolute_error', return_train_score=True)
+clf1.fit(X_SS, y)
+
+tr_mae_xbg, xgb_model= fit_ml_algo(xgb.XGBRegressor(random_state=0, max_depth= clf1.best_estimator_.max_depth, n_estimators= clf1.best_estimator_.n_estimators, booster='gbtree'), X_SS, y, Xt_SS)
+
+#print("\n", f"Train_MAE: {tr_mae_xbg}")
+
+
+#LGBMRegressor
+# Model Training on Lightgbm
+clf2 = lgb.LGBMRegressor(n_jobs=-1)
+params = {
+    'n_estimators': [5, 10, 50], 
+     'max_depth': [1, 5, 10]
+}
+
+clf2 = GridSearchCV(clf2, params, scoring='neg_mean_absolute_error', return_train_score=True)
+clf2.fit(X_SS, y)
+
+#Training with Best Model parameters
+tr_mae_lgb, model_lgb = fit_ml_algo(lgb.LGBMRegressor(random_state=0, max_depth= clf2.best_estimator_.max_depth, n_estimators= clf2.best_estimator_.n_estimators), X_SS, y, Xt_SS)
+
+#print("\n", f"Train_MAE_LGB: {tr_mae_lgb}")
+
+
+#Support Vector Regressor
+clf3 = SVR()
+params = {
+    'gamma': [0.001, 0.005, 0.01, 0.02, 0.05, 0.1], 
+    'C': [0.1, 0.2, 0.25, 0.5, 1, 1.5, 2]
+}
+
+clf3 = GridSearchCV(clf3, params, scoring='neg_mean_absolute_error', return_train_score=True)
+clf3.fit(X_SS, y)
+
+tr_mae_svr, model_svr = fit_ml_algo(SVR(C=1, gamma=0.005), X_SS, y, Xt_SS)
+
+#print("\n", f"Train_MAE_SVR: {tr_mae_svr}")
+
+#Catboost Model
+
+clf4 = CatBoostRegressor()
+params = {
+    'depth': [5, 10, 50], 
+    'iterations': [100,500,1000]
+}
+
+clf4 = GridSearchCV(clf4, params, scoring='neg_mean_absolute_error', return_train_score=True)
+clf4.fit(X_SS, y, silent=True)
+
+tr_mae_ct, model_ct = fit_ml_algo(CatBoostRegressor(depth=10, iterations=1000, loss_function='MAE', boosting_type='Ordered', silent=True), X_SS, y, Xt_SS)
+
+#print("\n", f"Train_MAE_Catboost: {tr_mae_ct}")
+
+
+#Creating a dataframe to load the data in a DataFrame
+cat_feature_importance =pd.DataFrame()
+cat_feature_importance['Features'] = X_SS.columns
+cat_feature_importance['Importances'] = model_ct.feature_importances_[:len(X_SS)]
+
+sorted_fe= cat_feature_importance.sort_values(by=['Importances'],ascending=False)
+
+plt.figure(figsize=(20,10))
+plt.title('Feature importances based on Catboost')
+plt.xlabel('Feature names')
+plt.ylabel('Importances')
+plt.bar( range(len(model_ct.feature_importances_)), model_ct.feature_importances_)
+plt.xticks(range(len(model_ct.feature_importances_)), X_SS.columns)
+plt.show()
+
+print('Top 10 Feautures are:\n', sorted_fe[:10])
+
+#Model Results
+tr_model = pd.DataFrame({
+    'Model': ['XGBRegressor', 'LGBRegression', 'SVR', 'CatBoost'],
+    'MAE': [
+        tr_mae_xbg, 
+        tr_mae_lgb,  
+        tr_mae_svr, 
+        tr_mae_ct]})
+
+tr_model.sort_values(by='MAE', ascending=True)
+
